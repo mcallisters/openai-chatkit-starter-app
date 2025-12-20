@@ -1,3 +1,6 @@
+// Backup: lib/config.ts — intro-only change snapshot
+// Created: 2025-12-19
+
 import { ColorScheme, StartScreenPrompt, ThemeOption } from "@openai/chatkit";
 
 export const WORKFLOW_ID =
