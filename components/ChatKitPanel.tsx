@@ -348,12 +348,34 @@ export function ChatKitPanel({
     const suppressed = new Map<Element, number>();
     const interimRegex = /^([.\s\u2026]+|\.{1,3}|…+)$/;
 
+    function looksLikeInternalJSON(text: string) {
+      const t = text.trim();
+      if (!t.startsWith("{") || !t.endsWith("}")) return false;
+      try {
+        const parsed = JSON.parse(t);
+        if (parsed && typeof parsed === "object") {
+          const keys = Object.keys(parsed as Record<string, unknown>);
+          // common keys seen in internal/tool deltas
+          return (
+            keys.includes("category") ||
+            keys.includes("tool") ||
+            keys.includes("type") ||
+            keys.includes("metadata")
+          );
+        }
+      } catch {
+        // not valid JSON
+      }
+      return false;
+    }
+
     function evaluateElement(el: Element) {
       const text = (el.textContent ?? "").trim();
       if (!text) return;
 
       const hasLetters = /[A-Za-z\p{L}]/u.test(text);
-      const isInterim = interimRegex.test(text) || (!hasLetters && text.length <= 6);
+      const isJSONInternal = looksLikeInternalJSON(text);
+      const isInterim = interimRegex.test(text) || (!hasLetters && text.length <= 6) || isJSONInternal;
 
       if (isInterim) {
         // hide it
@@ -423,6 +445,49 @@ export function ChatKitPanel({
 
     return () => {
       observer.disconnect();
+      window.clearInterval(interval);
+    };
+  }, [chatkit.control]);
+
+  // Best-effort: hide ChatKit's chat-history button if present in the
+  // web component's shadow DOM. Runs briefly after initialization and is
+  // intentionally conservative to avoid interfering with other UI.
+  useEffect(() => {
+    if (!isBrowser) return;
+    const root = document.querySelector("openai-chatkit") as HTMLElement | null;
+    if (!root) return;
+    const sr = (root as any)?.shadowRoot as ShadowRoot | null;
+    if (!sr) return;
+
+    let tries = 0;
+    const maxTries = 20; // ~6 seconds at 300ms interval
+
+    const interval = window.setInterval(() => {
+      tries += 1;
+      try {
+        const candidates = Array.from(sr.querySelectorAll('button, [role="button"], a')) as HTMLElement[];
+        for (const el of candidates) {
+          const txt = (el.textContent ?? "").trim().toLowerCase();
+          const title = (el.getAttribute("title") ?? "").trim().toLowerCase();
+          const aria = (el.getAttribute("aria-label") ?? "").trim().toLowerCase();
+          if (
+            txt.includes("history") ||
+            title.includes("history") ||
+            aria.includes("history") ||
+            txt === "history"
+          ) {
+            el.style.setProperty("display", "none", "important");
+          }
+        }
+      } catch (e) {
+        if (isDev) console.debug("hide-history-button failed", e);
+      }
+      if (tries >= maxTries) {
+        window.clearInterval(interval);
+      }
+    }, 300);
+
+    return () => {
       window.clearInterval(interval);
     };
   }, [chatkit.control]);
