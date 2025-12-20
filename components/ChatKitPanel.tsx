@@ -456,7 +456,7 @@ export function ChatKitPanel({
     if (!isBrowser) return;
     const root = document.querySelector("openai-chatkit") as HTMLElement | null;
     if (!root) return;
-    const sr = (root as any)?.shadowRoot as ShadowRoot | null;
+    const sr = (root as HTMLElement).shadowRoot as ShadowRoot | null;
     if (!sr) return;
 
     let tries = 0;
