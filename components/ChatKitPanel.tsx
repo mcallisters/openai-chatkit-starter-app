@@ -317,11 +317,50 @@ export function ChatKitPanel({
 
       return { success: false };
     },
+    // Event-level handlers: attempt to detect internal/log messages before
+    // they are rendered and suppress them. These are conservative and
+    // best-effort — if the web component renders before we can intercept
+    // the node we'll fall back to small DOM surgery targeted to the
+    // matching text (less noisy than a global MutationObserver scan).
     onResponseEnd: () => {
       onResponseEnd();
     },
-    onResponseStart: () => {
+    onResponseStart: (detail?: unknown) => {
       setErrorState({ integration: null, retryable: false });
+      if (!HIDE_INTERIM_RESPONSES) return;
+
+      try {
+        // Attempt to detect JSON/internal payloads in the event detail.
+        const maybeText =
+          typeof detail === "string"
+            ? detail
+            : detail && typeof detail === "object" && "message" in (detail as Record<string, unknown>)
+            ? String((detail as Record<string, unknown>).message)
+            : undefined;
+
+        if (maybeText && looksLikeInternalJSON(maybeText)) {
+          // suppress matching rendered nodes (targeted and conservative)
+          findAndSuppressTextMatch(maybeText);
+        }
+      } catch (e) {
+        if (isDev) console.debug("onResponseStart filter failed", e);
+      }
+    },
+    onLog: (detail?: unknown) => {
+      if (!HIDE_INTERIM_RESPONSES) return;
+      try {
+        const txt =
+          typeof detail === "string"
+            ? detail
+            : detail && typeof detail === "object" && "message" in (detail as Record<string, unknown>)
+            ? String((detail as Record<string, unknown>).message)
+            : undefined;
+        if (txt && looksLikeInternalJSON(txt)) {
+          findAndSuppressTextMatch(txt);
+        }
+      } catch (e) {
+        if (isDev) console.debug("onLog filter failed", e);
+      }
     },
     onThreadChange: () => {
       processedFacts.current.clear();
@@ -334,6 +373,44 @@ export function ChatKitPanel({
   };
 
   const chatkit = useChatKit(chatkitOptions);
+
+  // Helper: find and suppress elements inside the ChatKit host whose
+  // textContent matches the provided snippet. Conservative: only touch
+  // the element and a few parent levels to avoid hiding unrelated UI.
+  function findAndSuppressTextMatch(snippet: string) {
+    if (!isBrowser) return;
+    const host = document.querySelector("openai-chatkit") as HTMLElement | null;
+    if (!host) return;
+    const sr = host.shadowRoot as ShadowRoot | null;
+    const searchRoot = sr ?? host;
+    const normalized = snippet.trim();
+    if (!normalized) return;
+
+    // Search for elements that contain the snippet. Limit to reasonable
+    // number of nodes to avoid heavy work.
+    const candidates = Array.from(searchRoot.querySelectorAll("*")).slice(-400);
+    for (const el of candidates) {
+      try {
+        const text = (el.textContent ?? "").trim();
+        if (!text) continue;
+        if (text.includes(normalized) || normalized.includes(text)) {
+          // suppress this element or its small parent container
+          let target: Element | null = el;
+          let depth = 0;
+          while (target && depth < 4) {
+            if (target instanceof HTMLElement) {
+              target.dataset.__suppressed = "1";
+              target.style.setProperty("display", "none", "important");
+            }
+            target = target.parentElement;
+            depth += 1;
+          }
+        }
+      } catch {
+        // ignore
+      }
+    }
+  }
 
   // If enabled, observe the ChatKit DOM and hide short/interim streaming
   // nodes (ellipses, short punctuation-only fragments). We un-hide when a
